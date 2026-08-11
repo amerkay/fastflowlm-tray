@@ -370,6 +370,36 @@ def test_writing_over_unrelated_content_still_reads_back_the_new_model(tmp_path)
 
 
 # --------------------------------------------------------------------------
+# shown_model
+# --------------------------------------------------------------------------
+
+
+def test_a_running_server_is_named_by_the_model_it_actually_holds():
+    assert flm_state.shown_model("active", "lfm2.5-it:1.2b", "qwen3.6-moe:35b-a3b") == (
+        "qwen3.6-moe:35b-a3b"
+    )
+
+
+def test_a_running_server_with_no_load_line_yet_falls_back_to_the_configured_model():
+    assert flm_state.shown_model("active", "lfm2.5-it:1.2b", None) == "lfm2.5-it:1.2b"
+
+
+@pytest.mark.parametrize("active", ["inactive", "failed", "activating", "deactivating"])
+def test_a_server_that_is_not_running_is_named_by_what_it_would_preload(active):
+    assert flm_state.shown_model(active, "lfm2.5-it:1.2b", "qwen3.6-moe:35b-a3b") == (
+        "lfm2.5-it:1.2b"
+    )
+
+
+def test_nothing_configured_and_nothing_resident_names_nothing():
+    assert flm_state.shown_model("inactive", None, None) is None
+
+
+def test_a_resident_model_is_reported_even_with_no_model_configured():
+    assert flm_state.shown_model("active", None, "llama3.2:1b") == "llama3.2:1b"
+
+
+# --------------------------------------------------------------------------
 # visual_state
 # --------------------------------------------------------------------------
 

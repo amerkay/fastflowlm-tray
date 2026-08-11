@@ -101,6 +101,17 @@ def write_model(path: Path, name: str) -> None:
     path.write_text(f"FLM_MODEL={name}\n")
 
 
+def shown_model(active: str, configured: str | None,
+                serving: str | None) -> str | None:
+    """The model the UI should name.
+
+    While the unit runs, that is whatever is resident — a client asking for
+    another model hot-swaps it, so FLM_MODEL then names only what was
+    preloaded. Stopped, the configured model is all there is to report.
+    """
+    return serving if active == "active" and serving else configured
+
+
 class VisualState(NamedTuple):
     colour: str
     note: str

@@ -38,7 +38,7 @@ from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from flm_state import (
     COLOUR_IDLE, COLOUR_RUNNING, model_dir_for_line, parse_model_list,
     phase_for_line, read_model, resolve_model_tag, should_idle_stop,
-    visual_state, write_model,
+    shown_model, visual_state, write_model,
 )
 
 UNIT = "flm.service"
@@ -113,6 +113,7 @@ class FlmTray:
         self._scan_failed = False
         self._phase: str | None = None      # journal: loading / busy / ready
         self._loaded_dir: str | None = None  # journal: model actually resident
+        self._active = "unknown"            # last polled ActiveState
         self._last_used = time.monotonic()
         self._breath_colour = COLOUR_RUNNING
         self._frame = 0
@@ -205,10 +206,14 @@ class FlmTray:
         self.model_menu.addAction(QAction("Rescan", self.model_menu, triggered=self._rescan))
         self._sync_model_menu()
 
+    def _current_model(self) -> str | None:
+        """What the menu title and tooltip both name — see shown_model()."""
+        return shown_model(self._active, read_model(ENV_FILE), self._serving())
+
     def _sync_model_menu(self) -> None:
-        """Re-read the env file so the radio can't drift from what the unit will
-        actually load — it changes outside our clicks (rescan, manual edit)."""
-        current = read_model(ENV_FILE)
+        """Recompute rather than trust the last paint: the mark drifts outside
+        our clicks (a client hot-swapping, a rescan, a manual edit of env)."""
+        current = self._current_model()
         for name, act in self._model_actions.items():
             act.setChecked(name == current)
 
@@ -285,6 +290,7 @@ class FlmTray:
 
     def _refresh(self) -> None:
         load, active = unit_props()
+        self._active = active
         limit = IDLE_STOP_S if self.act_idle.isChecked() else math.inf
         if should_idle_stop(active, self._phase,
                             time.monotonic() - self._last_used, limit):
@@ -297,15 +303,13 @@ class FlmTray:
             return
         self._shown = state
 
-        self.model_menu.setTitle(f"Model ({configured or 'unit default'}){TITLE_PAD}")
+        shown = shown_model(active, configured, serving)
+        self.model_menu.setTitle(f"Model ({shown or 'unit default'}){TITLE_PAD}")
         self._sync_model_menu()
 
         colour, note, animate = visual_state(load, active, self._phase)
         if load != "loaded":
-            note = f"{UNIT} not installed ({load})"
-            shown = None
-        else:
-            shown = serving if active == "active" and serving else configured
+            note, shown = f"{UNIT} not installed ({load})", None
         self._paint(colour, f"flm: {note} — {shown or 'unit default'}", animate)
 
         up = active in ("active", "activating")
