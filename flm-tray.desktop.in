@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=FastFlowLM Tray
+GenericName=FastFlowLM server control
+Comment=Start, stop and switch FastFlowLM models from the system tray
+Exec=@EXEC@
+Icon=applications-science
+Terminal=false
+Categories=Utility;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true

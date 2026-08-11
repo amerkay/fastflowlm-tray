@@ -1,0 +1,38 @@
+# FastFlowLM server, supervised by the systemd *user* manager.
+# Installed by ./install.sh, which copies this file to ~/.config/systemd/user/
+# and rewrites the ExecStart binary to wherever `flm` actually lives. Re-run
+# install.sh after editing; the installed copy is a copy, not a symlink.
+#
+# Deliberately NOT enabled and has no [Install] section: the server only runs
+# when started from the tray. `systemctl --user enable` will refuse, by design.
+#
+# ExecStart must be an ABSOLUTE path: the user manager's PATH does not
+# include ~/.local/bin.
+#
+# Flags: no --host (localhost only), --cors 0 also blocks a browser page from
+# reaching 127.0.0.1:52625. --ctx-len is omitted: 32768 is already the default.
+
+[Unit]
+Description=FastFlowLM server
+
+[Service]
+# The model is whatever the tray last wrote. Environment= first, EnvironmentFile=
+# second, so the file wins; the leading `-` makes a missing file fall back to
+# this default instead of starting `flm serve` with an empty model argument.
+Environment=FLM_MODEL=gemma4-it:e2b
+EnvironmentFile=-%h/.config/flm-tray/env
+ExecStart=/usr/bin/flm serve ${FLM_MODEL} --asr 1 --pmode turbo --cors 0
+
+# NPU workloads pin their weights; a Plasma-session child inherits the PAM
+# memlock limit instead and fails at model load. This is why the tray does
+# not spawn flm itself.
+LimitMEMLOCK=infinity
+
+# Skip the pre-run version check: no network round-trip gating a start.
+Environment=FLM_DISABLE_UPDATE_CHECK=1
+
+Restart=on-failure
+RestartSec=5
+# Unloading ~20 GB is not instant; SIGKILL mid-unload can leave the XRT
+# context wedged ("No such device with index '0'" on the next start).
+TimeoutStopSec=60
