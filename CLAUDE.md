@@ -44,6 +44,10 @@ The tray writes `FLM_MODEL=<name>` to `~/.config/flm-tray/env` and restarts the 
 
 Tooltip, submenu title and radio mark must all name the same model. Route every one of them through `shown_model()`; reading the env file directly is what let the menu drift from the tooltip after a hot-swap.
 
+## Git
+
+Commit on `main`, never a feature branch or PR. Still ask before every commit.
+
 ## Constraints
 
 - Never make the tray the parent of `flm serve`. The unit grants `LimitMEMLOCK=infinity`; a Plasma-session child inherits the PAM limit and fails at model load.
