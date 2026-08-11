@@ -28,7 +28,9 @@ cd fastflowlm-tray
 ./install.sh
 ```
 
-`install.sh` locates your `flm` binary, writes the unit to `~/.config/systemd/user/flm.service`, and adds an autostart entry so the tray returns after you log in. It does not enable the unit. Nothing loads a 20 GB model until you ask it to.
+`install.sh` locates your `flm` binary, writes the unit to `~/.config/systemd/user/flm.service`, and installs the same desktop entry twice: to `~/.config/autostart/` so the tray returns after you log in, and to `~/.local/share/applications/` so it also appears in your application menu. It does not enable the unit. Nothing loads a 20 GB model until you ask it to.
+
+Both entries carry the repository path in their `Exec` line, so re-run `install.sh` if you move this directory.
 
 Start the tray for this session:
 
