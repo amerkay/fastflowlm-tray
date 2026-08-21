@@ -36,9 +36,10 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from flm_state import (
-    COLOUR_IDLE, COLOUR_RUNNING, model_dir_for_line, parse_model_list,
-    phase_for_line, read_model, resolve_model_tag, should_idle_stop,
-    shown_model, visual_state, write_model,
+    COLOUR_IDLE, COLOUR_RUNNING, CTX_CHOICES, ctx_label, model_dir_for_line,
+    parse_model_list, phase_for_line, read_ctx, read_env, read_model,
+    resolve_model_tag, should_idle_stop, shown_model, visual_state, write_ctx,
+    write_model,
 )
 
 UNIT = "flm.service"
@@ -84,23 +85,26 @@ def make_dot_icon(colour: str, alpha: int = 255) -> QIcon:
     return QIcon(pix)
 
 
-def unit_props() -> tuple[str, str]:
-    """(LoadState, ActiveState) for UNIT.
+def unit_props() -> tuple[str, str, str]:
+    """(LoadState, ActiveState, ExecStart) for UNIT.
 
     `systemctl show` succeeds even for an unknown unit, which is what lets us
     tell "not installed" apart from "installed but stopped" — `is-active`
-    reports both as inactive.
+    reports both as inactive. ExecStart comes back as a struct, so it is only
+    ever substring-matched: the installed unit is a copy of flm.service, and a
+    stale one silently ignores a flag the tray thinks it is setting.
     """
     try:
         out = subprocess.run(
-            ["systemctl", "--user", "show", UNIT,
-             "--property=LoadState", "--property=ActiveState"],
+            ["systemctl", "--user", "show", UNIT, "--property=LoadState",
+             "--property=ActiveState", "--property=ExecStart"],
             capture_output=True, text=True, timeout=2,
         ).stdout
     except (OSError, subprocess.SubprocessError):
-        return "unknown", "unknown"
+        return "unknown", "unknown", ""
     props = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
-    return props.get("LoadState", "unknown"), props.get("ActiveState", "unknown")
+    return (props.get("LoadState", "unknown"), props.get("ActiveState", "unknown"),
+            props.get("ExecStart", ""))
 
 
 class FlmTray:
@@ -110,6 +114,8 @@ class FlmTray:
         self._shown: tuple | None = None
         self._models: list[tuple[str, bool]] | None = None  # None = not scanned
         self._model_actions: dict[str, QAction] = {}
+        self._ctx_actions: dict[int, QAction] = {}
+        self._ctx_supported = True  # installed unit passes --ctx-len ${FLM_CTX}
         self._scan_failed = False
         self._phase: str | None = None      # journal: loading / busy / ready
         self._loaded_dir: str | None = None  # journal: model actually resident
@@ -165,6 +171,7 @@ class FlmTray:
 
         self.model_menu = QMenu("Model", menu)
         self.model_menu.aboutToShow.connect(self._sync_model_menu)
+        self.ctx_menu = self._build_ctx_menu(menu)
 
         self.act_idle = QAction(f"Stop after {IDLE_STOP_S // 60} minutes idle",
                                 menu, checkable=True)
@@ -175,6 +182,7 @@ class FlmTray:
             menu.addAction(act)
         menu.addSeparator()
         menu.addMenu(self.model_menu)
+        menu.addMenu(self.ctx_menu)
         menu.addSeparator()
         menu.addAction(self.act_idle)
         menu.addSeparator()
@@ -216,6 +224,39 @@ class FlmTray:
         current = self._current_model()
         for name, act in self._model_actions.items():
             act.setChecked(name == current)
+
+    def _build_ctx_menu(self, parent: QMenu) -> QMenu:
+        """A fixed list, unlike the model menu: --ctx-len takes any number, but
+        three offers cover the trade-off between reach and prefill time."""
+        menu = QMenu("Context", parent)
+        group = self._ctx_group = QActionGroup(menu)
+        for tokens in CTX_CHOICES:
+            act = QAction(ctx_label(tokens), group, checkable=True)
+            act.triggered.connect(lambda _, n=tokens: self._choose_ctx(n))
+            menu.addAction(act)
+            self._ctx_actions[tokens] = act
+        menu.aboutToShow.connect(self._sync_ctx_menu)
+        return menu
+
+    def _sync_ctx_menu(self) -> None:
+        """A hand-edited FLM_CTX outside our offers leaves every radio clear,
+        rather than marking a context the server is not serving."""
+        current = read_ctx(ENV_FILE)
+        for tokens, act in self._ctx_actions.items():
+            act.setChecked(tokens == current)
+        note = ctx_label(current) if self._ctx_supported else "re-run install.sh"
+        self.ctx_menu.setTitle(f"Context ({note}){TITLE_PAD}")
+        self.ctx_menu.setEnabled(self._ctx_supported)
+
+    def _choose_ctx(self, tokens: int) -> None:
+        """--ctx-len is read once at process start, so a running server has to
+        come back for it. A stopped one is left stopped: this is a preference,
+        not a reason to pull 20 GB into memory."""
+        write_ctx(ENV_FILE, tokens)
+        if self._active in ("active", "activating"):
+            self._systemctl("restart")
+        else:
+            self._sync_ctx_menu()
 
     def _start_scan(self) -> None:
         if self._scan.state() == QProcess.ProcessState.NotRunning:
@@ -289,23 +330,25 @@ class FlmTray:
         return resolve_model_tag(self._loaded_dir, [n for n, _ in self._models or []])
 
     def _refresh(self) -> None:
-        load, active = unit_props()
+        load, active, exec_start = unit_props()
         self._active = active
+        self._ctx_supported = "--ctx-len" in exec_start
         limit = IDLE_STOP_S if self.act_idle.isChecked() else math.inf
         if should_idle_stop(active, self._phase,
                             time.monotonic() - self._last_used, limit):
             self._systemctl("stop")
             return
 
-        configured, serving = read_model(ENV_FILE), self._serving()
-        state = (load, active, self._phase, configured, serving)
+        env, serving = read_env(ENV_FILE), self._serving()
+        state = (load, active, self._phase, env, serving, self._ctx_supported)
         if state == self._shown:
             return
         self._shown = state
 
-        shown = shown_model(active, configured, serving)
+        shown = shown_model(active, env.get("FLM_MODEL"), serving)
         self.model_menu.setTitle(f"Model ({shown or 'unit default'}){TITLE_PAD}")
         self._sync_model_menu()
+        self._sync_ctx_menu()
 
         colour, note, animate = visual_state(load, active, self._phase)
         if load != "loaded":

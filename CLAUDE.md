@@ -44,6 +44,10 @@ The tray writes `FLM_MODEL=<name>` to `~/.config/flm-tray/env` and restarts the 
 
 Tooltip, submenu title and radio mark must all name the same model. Route every one of them through `shown_model()`; reading the env file directly is what let the menu drift from the tooltip after a hot-swap.
 
+## Pattern: context length
+
+`--ctx-len` comes from `FLM_CTX` in the same env file. Write it with `write_env()`, never by rewriting the file, or switching model silently resets the context. Unlike the model, it is fixed at process start: changing it restarts a running server and leaves a stopped one stopped.
+
 ## Git
 
 Commit on `main`, never a feature branch or PR. Still ask before every commit.

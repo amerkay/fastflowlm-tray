@@ -10,18 +10,20 @@
 # include ~/.local/bin.
 #
 # Flags: no --host (localhost only), --cors 0 also blocks a browser page from
-# reaching 127.0.0.1:52625. --ctx-len is omitted: 32768 is already the default.
+# reaching 127.0.0.1:52625.
 
 [Unit]
 Description=FastFlowLM server
 
 [Service]
-# The model is whatever the tray last wrote. Environment= first, EnvironmentFile=
-# second, so the file wins; the leading `-` makes a missing file fall back to
-# this default instead of starting `flm serve` with an empty model argument.
+# The model and context are whatever the tray last wrote. Environment= first,
+# EnvironmentFile= second, so the file wins; the leading `-` makes a missing file
+# fall back to these defaults instead of starting `flm serve` with empty
+# arguments. FLM_CTX=32768 is FastFlowLM's own default context length.
 Environment=FLM_MODEL=gemma4-it:e2b
+Environment=FLM_CTX=32768
 EnvironmentFile=-%h/.config/flm-tray/env
-ExecStart=/usr/bin/flm serve ${FLM_MODEL} --asr 1 --pmode turbo --cors 0
+ExecStart=/usr/bin/flm serve ${FLM_MODEL} --ctx-len ${FLM_CTX} --asr 1 --pmode turbo --cors 0
 
 # NPU workloads pin their weights; a Plasma-session child inherits the PAM
 # memlock limit instead and fails at model load. This is why the tray does

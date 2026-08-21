@@ -42,7 +42,11 @@ The absolute interpreter path is deliberate. PyQt6 is a system package, so a `py
 
 ## Using it
 
-Right click the dot for Start, Stop, Restart, the model list and the log viewer. Left click opens the journal in a terminal, middle click restarts.
+Right click the dot for Start, Stop, Restart, the model list, the context length and the log viewer. Left click opens the journal in a terminal, middle click restarts.
+
+Context is 16k, 32k or 64k tokens, and 32k is FastFlowLM's own default. A longer context costs memory and prefill time on every request, not only on the long ones, so raise it when you actually need the reach. Unlike the model, it is fixed when the server starts, so picking a new one restarts a running server. If it is already stopped it stays stopped, and the new context applies at the next start.
+
+If the Context submenu is greyed out and says "re-run install.sh", the installed unit predates this option. Run `./install.sh` again to refresh it.
 
 The server shuts down when you quit the tray, and after thirty minutes with no request. A loaded model holds around 20 GB, which is a lot to leave sitting idle. Untick "Stop after 30 minutes idle" if you would rather keep it warm; the choice is remembered.
 

@@ -32,6 +32,11 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _NPU_SUFFIX_RE = re.compile(r"npu2?$")
 _TAG_MATCH_THRESHOLD = 0.62
 
+# --ctx-len the unit passes to `flm serve`. 32768 is FastFlowLM's own default,
+# so an env file naming no context and an unpatched unit agree on it.
+CTX_CHOICES = (16384, 32768, 65536)
+CTX_DEFAULT = 32768
+
 
 def phase_for_line(line: str) -> str | None:
     """The phase a journal line implies, or None if it implies nothing."""
@@ -83,22 +88,59 @@ def parse_model_list(text: str) -> list[tuple[str, bool]]:
     ]
 
 
-def read_model(path: Path) -> str | None:
-    """FLM_MODEL from the env file the systemd unit reads, or None."""
+def read_env(path: Path) -> dict[str, str]:
+    """Non-empty KEY=value pairs from the env file the systemd unit reads.
+
+    Lines with no `=` are dropped rather than raising: this file is also the
+    unit's EnvironmentFile, so anything unparseable is systemd's problem.
+    """
     try:
-        for line in Path(path).read_text().splitlines():
-            key, sep, value = line.partition("=")
-            if sep and key.strip() == "FLM_MODEL":
-                return value.strip() or None
+        text = Path(path).read_text()
     except OSError:
-        pass
-    return None
+        return {}
+    pairs = (line.partition("=") for line in text.splitlines())
+    return {k.strip(): v.strip() for k, sep, v in pairs if sep and v.strip()}
+
+
+def write_env(path: Path, **values: str) -> None:
+    """Merge values in, keeping the keys we are not setting.
+
+    A rewrite from scratch would drop FLM_CTX every time the model changes.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    merged = {**read_env(path), **values}
+    path.write_text("".join(f"{k}={v}\n" for k, v in merged.items()))
+
+
+def read_model(path: Path) -> str | None:
+    """FLM_MODEL from the env file, or None."""
+    return read_env(path).get("FLM_MODEL")
 
 
 def write_model(path: Path, name: str) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"FLM_MODEL={name}\n")
+    write_env(path, FLM_MODEL=name)
+
+
+def ctx_label(tokens: int) -> str:
+    """16384 -> '16k'. Anything not a whole number of k keeps its digits."""
+    k, remainder = divmod(tokens, 1024)
+    return f"{k}k" if k and not remainder else str(tokens)
+
+
+def read_ctx(path: Path) -> int:
+    """FLM_CTX from the env file, or CTX_DEFAULT when absent or not a number.
+
+    A hand-edited value outside CTX_CHOICES is honoured, not snapped to the
+    nearest offer: the menu would otherwise name a context the server is not
+    serving. No radio is marked for it.
+    """
+    value = read_env(path).get("FLM_CTX", "")
+    return int(value) if value.isdigit() and int(value) > 0 else CTX_DEFAULT
+
+
+def write_ctx(path: Path, tokens: int) -> None:
+    write_env(path, FLM_CTX=str(tokens))
 
 
 def shown_model(active: str, configured: str | None,

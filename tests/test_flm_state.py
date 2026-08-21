@@ -370,6 +370,93 @@ def test_writing_over_unrelated_content_still_reads_back_the_new_model(tmp_path)
 
 
 # --------------------------------------------------------------------------
+# read_env / write_env
+# --------------------------------------------------------------------------
+
+
+def test_a_missing_file_reads_as_an_empty_environment(tmp_path):
+    assert flm_state.read_env(tmp_path / "nope.env") == {}
+
+
+def test_unparseable_lines_are_dropped_rather_than_raising(tmp_path):
+    path = tmp_path / "flm.env"
+    path.write_text("JUNK\n\nFLM_MODEL=llama3.2:1b\nEMPTY=\n")
+    assert flm_state.read_env(path) == {"FLM_MODEL": "llama3.2:1b"}
+
+
+def test_setting_one_key_keeps_the_others(tmp_path):
+    path = tmp_path / "flm.env"
+    flm_state.write_env(path, FLM_MODEL="llama3.2:1b", FLM_CTX="65536")
+    flm_state.write_env(path, FLM_MODEL="gemma4-it:e2b")
+    assert flm_state.read_env(path) == {
+        "FLM_MODEL": "gemma4-it:e2b", "FLM_CTX": "65536",
+    }
+
+
+def test_switching_models_does_not_lose_the_context_length(tmp_path):
+    path = tmp_path / "flm.env"
+    flm_state.write_ctx(path, 65536)
+    flm_state.write_model(path, "qwen3.6-moe:35b-a3b")
+    assert flm_state.read_ctx(path) == 65536
+
+
+# --------------------------------------------------------------------------
+# ctx_label / read_ctx / write_ctx
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "tokens,label",
+    [(16384, "16k"), (32768, "32k"), (65536, "64k"), (1000, "1000"), (0, "0")],
+)
+def test_a_whole_number_of_k_is_labelled_in_k_and_anything_else_in_digits(
+    tokens, label
+):
+    assert flm_state.ctx_label(tokens) == label
+
+
+def test_every_offered_context_is_labelled_in_k():
+    assert [flm_state.ctx_label(n) for n in flm_state.CTX_CHOICES] == [
+        "16k", "32k", "64k",
+    ]
+
+
+def test_the_default_context_is_one_of_the_offered_ones():
+    assert flm_state.CTX_DEFAULT in flm_state.CTX_CHOICES
+
+
+@pytest.mark.parametrize("content", ["", "FLM_CTX=\n", "FLM_CTX=big\n",
+                                     "FLM_CTX=-1\n", "FLM_CTX=32k\n"])
+def test_an_absent_or_unusable_context_falls_back_to_the_default(tmp_path, content):
+    path = tmp_path / "flm.env"
+    path.write_text(content)
+    assert flm_state.read_ctx(path) == flm_state.CTX_DEFAULT
+
+
+def test_a_missing_file_reads_as_the_default_context(tmp_path):
+    assert flm_state.read_ctx(tmp_path / "nope.env") == flm_state.CTX_DEFAULT
+
+
+@pytest.mark.parametrize("tokens", flm_state.CTX_CHOICES)
+def test_a_written_context_round_trips(tmp_path, tokens):
+    path = tmp_path / "flm.env"
+    flm_state.write_ctx(path, tokens)
+    assert flm_state.read_ctx(path) == tokens
+
+
+def test_a_hand_edited_context_is_reported_as_written_not_snapped(tmp_path):
+    path = tmp_path / "flm.env"
+    path.write_text("FLM_CTX=8192\n")
+    assert flm_state.read_ctx(path) == 8192
+
+
+def test_writing_a_context_creates_missing_parent_directories(tmp_path):
+    path = tmp_path / "deep" / "nested" / "flm.env"
+    flm_state.write_ctx(path, 16384)
+    assert flm_state.read_ctx(path) == 16384
+
+
+# --------------------------------------------------------------------------
 # shown_model
 # --------------------------------------------------------------------------
 
