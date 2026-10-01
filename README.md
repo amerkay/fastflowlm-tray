@@ -42,11 +42,13 @@ The absolute interpreter path is deliberate. PyQt6 is a system package, so a `py
 
 ## Using it
 
-Right click the dot for Start, Stop, Restart, the model list, the context length and the log viewer. Left click opens the journal in a terminal, middle click restarts.
+Right click the dot for Start, Stop, Restart, the model list, the context length, the ASR toggle and the log viewer. Left click opens the journal in a terminal, middle click restarts.
 
-Context is 16k, 32k or 64k tokens, and 32k is FastFlowLM's own default. A longer context costs memory and prefill time on every request, not only on the long ones, so raise it when you actually need the reach. Unlike the model, it is fixed when the server starts, so picking a new one restarts a running server. If it is already stopped it stays stopped, and the new context applies at the next start.
+Context is 8k, 16k, 32k or 64k tokens, and 32k is FastFlowLM's own default. Stay within the model's max on its [model card](https://fastflowlm.com/docs/models/), or it fails to load. `qwen3.8-mtp:27b` takes 8k at most. A longer context costs memory and prefill time on every request, not only on the long ones, so raise it when you actually need the reach. Unlike the model, it is fixed when the server starts, so picking a new one restarts a running server. If it is already stopped it stays stopped, and the new context applies at the next start.
 
-If the Context submenu is greyed out and says "re-run install.sh", the installed unit predates this option. Run `./install.sh` again to refresh it.
+Speech to text (ASR) loads Whisper next to the model, and it is off by default. Whisper takes NPU room, so a large model like `qwen3.8-mtp:27b` fails to load with it on. Toggling it restarts a running server.
+
+If the Context submenu and ASR toggle are greyed out and the menu says "re-run install.sh", the installed unit predates them. Run `./install.sh` again to refresh it.
 
 The server shuts down when you quit the tray, and after thirty minutes with no request. A loaded model holds around 20 GB, which is a lot to leave sitting idle. Untick "Stop after 30 minutes idle" if you would rather keep it warm; the choice is remembered.
 

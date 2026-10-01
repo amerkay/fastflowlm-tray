@@ -34,7 +34,8 @@ _TAG_MATCH_THRESHOLD = 0.62
 
 # --ctx-len the unit passes to `flm serve`. 32768 is FastFlowLM's own default,
 # so an env file naming no context and an unpatched unit agree on it.
-CTX_CHOICES = (16384, 32768, 65536)
+# A model's max is on its card, and over it the load fails: qwen3.8-mtp:27b takes 8k.
+CTX_CHOICES = (8192, 16384, 32768, 65536)
 CTX_DEFAULT = 32768
 
 
@@ -141,6 +142,16 @@ def read_ctx(path: Path) -> int:
 
 def write_ctx(path: Path, tokens: int) -> None:
     write_env(path, FLM_CTX=str(tokens))
+
+
+def read_asr(path: Path) -> bool:
+    """FLM_ASR from the env file. Off unless it says 1: Whisper takes NPU
+    room that a large model then cannot get."""
+    return read_env(path).get("FLM_ASR") == "1"
+
+
+def write_asr(path: Path, on: bool) -> None:
+    write_env(path, FLM_ASR="1" if on else "0")
 
 
 def shown_model(active: str, configured: str | None,

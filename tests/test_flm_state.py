@@ -417,7 +417,7 @@ def test_a_whole_number_of_k_is_labelled_in_k_and_anything_else_in_digits(
 
 def test_every_offered_context_is_labelled_in_k():
     assert [flm_state.ctx_label(n) for n in flm_state.CTX_CHOICES] == [
-        "16k", "32k", "64k",
+        "8k", "16k", "32k", "64k",
     ]
 
 
@@ -454,6 +454,28 @@ def test_writing_a_context_creates_missing_parent_directories(tmp_path):
     path = tmp_path / "deep" / "nested" / "flm.env"
     flm_state.write_ctx(path, 16384)
     assert flm_state.read_ctx(path) == 16384
+
+
+# --------------------------------------------------------------------------
+# read_asr / write_asr
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("content", ["", "FLM_ASR=0\n", "FLM_ASR=yes\n"])
+def test_asr_is_off_unless_the_env_file_says_1(tmp_path, content):
+    path = tmp_path / "flm.env"
+    path.write_text(content)
+    assert flm_state.read_asr(path) is False
+
+
+@pytest.mark.parametrize("on", [True, False])
+def test_asr_round_trips_without_touching_model_or_context(tmp_path, on):
+    path = tmp_path / "flm.env"
+    flm_state.write_env(path, FLM_MODEL="gemma4-it:e2b", FLM_CTX="8192")
+    flm_state.write_asr(path, on)
+    assert flm_state.read_asr(path) is on
+    assert flm_state.read_ctx(path) == 8192
+    assert flm_state.read_model(path) == "gemma4-it:e2b"
 
 
 # --------------------------------------------------------------------------

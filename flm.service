@@ -22,8 +22,9 @@ Description=FastFlowLM server
 # arguments. FLM_CTX=32768 is FastFlowLM's own default context length.
 Environment=FLM_MODEL=gemma4-it:e2b
 Environment=FLM_CTX=32768
+Environment=FLM_ASR=0
 EnvironmentFile=-%h/.config/flm-tray/env
-ExecStart=/usr/bin/flm serve ${FLM_MODEL} --ctx-len ${FLM_CTX} --asr 1 --pmode turbo --cors 0
+ExecStart=/usr/bin/flm serve ${FLM_MODEL} --ctx-len ${FLM_CTX} --asr ${FLM_ASR} --pmode turbo --cors 0
 
 # NPU workloads pin their weights; a Plasma-session child inherits the PAM
 # memlock limit instead and fails at model load. This is why the tray does

@@ -37,8 +37,8 @@ from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from flm_state import (
     COLOUR_IDLE, COLOUR_RUNNING, CTX_CHOICES, ctx_label, model_dir_for_line,
-    parse_model_list, phase_for_line, read_ctx, read_env, read_model,
-    resolve_model_tag, should_idle_stop, shown_model, visual_state, write_ctx,
+    parse_model_list, phase_for_line, read_asr, read_ctx, read_env, read_model,
+    resolve_model_tag, should_idle_stop, shown_model, visual_state, write_asr, write_ctx,
     write_model,
 )
 
@@ -115,7 +115,7 @@ class FlmTray:
         self._models: list[tuple[str, bool]] | None = None  # None = not scanned
         self._model_actions: dict[str, QAction] = {}
         self._ctx_actions: dict[int, QAction] = {}
-        self._ctx_supported = True  # installed unit passes --ctx-len ${FLM_CTX}
+        self._unit_current = True  # installed unit passes ${FLM_CTX} and ${FLM_ASR}
         self._scan_failed = False
         self._phase: str | None = None      # journal: loading / busy / ready
         self._loaded_dir: str | None = None  # journal: model actually resident
@@ -172,6 +172,8 @@ class FlmTray:
         self.model_menu = QMenu("Model", menu)
         self.model_menu.aboutToShow.connect(self._sync_model_menu)
         self.ctx_menu = self._build_ctx_menu(menu)
+        self.act_asr = QAction("Speech to text (ASR)", menu, checkable=True)
+        self.act_asr.triggered.connect(self._choose_asr)
 
         self.act_idle = QAction(f"Stop after {IDLE_STOP_S // 60} minutes idle",
                                 menu, checkable=True)
@@ -183,6 +185,7 @@ class FlmTray:
         menu.addSeparator()
         menu.addMenu(self.model_menu)
         menu.addMenu(self.ctx_menu)
+        menu.addAction(self.act_asr)
         menu.addSeparator()
         menu.addAction(self.act_idle)
         menu.addSeparator()
@@ -244,15 +247,24 @@ class FlmTray:
         current = read_ctx(ENV_FILE)
         for tokens, act in self._ctx_actions.items():
             act.setChecked(tokens == current)
-        note = ctx_label(current) if self._ctx_supported else "re-run install.sh"
+        note = ctx_label(current) if self._unit_current else "re-run install.sh"
         self.ctx_menu.setTitle(f"Context ({note}){TITLE_PAD}")
-        self.ctx_menu.setEnabled(self._ctx_supported)
+        self.ctx_menu.setEnabled(self._unit_current)
+        self.act_asr.setChecked(read_asr(ENV_FILE))
+        self.act_asr.setEnabled(self._unit_current)
 
     def _choose_ctx(self, tokens: int) -> None:
-        """--ctx-len is read once at process start, so a running server has to
-        come back for it. A stopped one is left stopped: this is a preference,
-        not a reason to pull 20 GB into memory."""
         write_ctx(ENV_FILE, tokens)
+        self._restart_if_running()
+
+    def _choose_asr(self, on: bool) -> None:
+        write_asr(ENV_FILE, on)
+        self._restart_if_running()
+
+    def _restart_if_running(self) -> None:
+        """Flags are read once at process start, so a running server has to
+        come back for them. A stopped one is left stopped: this is a preference,
+        not a reason to pull 20 GB into memory."""
         if self._active in ("active", "activating"):
             self._systemctl("restart")
         else:
@@ -332,7 +344,7 @@ class FlmTray:
     def _refresh(self) -> None:
         load, active, exec_start = unit_props()
         self._active = active
-        self._ctx_supported = "--ctx-len" in exec_start
+        self._unit_current = "FLM_ASR" in exec_start
         limit = IDLE_STOP_S if self.act_idle.isChecked() else math.inf
         if should_idle_stop(active, self._phase,
                             time.monotonic() - self._last_used, limit):
@@ -340,7 +352,7 @@ class FlmTray:
             return
 
         env, serving = read_env(ENV_FILE), self._serving()
-        state = (load, active, self._phase, env, serving, self._ctx_supported)
+        state = (load, active, self._phase, env, serving, self._unit_current)
         if state == self._shown:
             return
         self._shown = state
