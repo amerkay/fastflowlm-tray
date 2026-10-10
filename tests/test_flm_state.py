@@ -626,3 +626,39 @@ def test_a_service_that_is_not_active_is_never_idle_stopped(active):
 def test_a_zero_limit_stops_as_soon_as_any_idle_time_has_passed():
     assert flm_state.should_idle_stop("active", None, 1, 0) is True
     assert flm_state.should_idle_stop("active", None, 0, 0) is False
+
+
+# --------------------------------------------------------------------------
+# webui_action
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("flm", ["inactive", "failed"])
+@pytest.mark.parametrize("webui", ["active", "activating"])
+@pytest.mark.parametrize("autostart", [True, False])
+def test_open_webui_stops_whenever_flm_is_down(flm, webui, autostart):
+    # A crash or an outside `systemctl stop` counts, not only a tray click.
+    assert flm_state.webui_action(True, flm, webui, autostart) == "stop"
+
+
+@pytest.mark.parametrize("flm", ["active", "activating", "deactivating"])
+def test_open_webui_is_not_stopped_while_flm_is_up_or_still_going_down(flm):
+    assert flm_state.webui_action(True, flm, "active", True) is None
+
+
+def test_a_stopped_open_webui_is_not_stopped_again():
+    assert flm_state.webui_action(True, "inactive", "inactive", True) is None
+
+
+@pytest.mark.parametrize("flm", ["active", "activating"])
+def test_flm_coming_up_starts_open_webui_when_autostart_is_on(flm):
+    assert flm_state.webui_action(False, flm, "inactive", True) == "start"
+    assert flm_state.webui_action(False, flm, "inactive", False) is None
+
+
+def test_a_manual_stop_sticks_while_flm_stays_up():
+    assert flm_state.webui_action(True, "active", "inactive", True) is None
+
+
+def test_a_running_open_webui_is_never_started_again():
+    assert flm_state.webui_action(False, "active", "active", True) is None

@@ -5,7 +5,7 @@ A PyQt6 system tray that controls a FastFlowLM server running as a systemd user 
 ## Commands
 
 ```bash
-python3 -m pytest tests/ -q          # 155 cases, no Qt, no network, under a second
+python3 -m pytest tests/ -q          # 199 cases, no Qt, no network, under a second
 python3 -m py_compile flm_tray.py    # the Qt shell has no test coverage
 /usr/bin/python3 flm_tray.py &       # never conda or venv; PyQt6 is a system package
 ./install.sh                         # host terminal only, a sandbox cannot reach host systemd
@@ -56,7 +56,8 @@ Commit on `main`, never a feature branch or PR. Still ask before every commit.
 
 - Never make the tray the parent of `flm serve`. The unit grants `LimitMEMLOCK=infinity`; a Plasma-session child inherits the PAM limit and fails at model load.
 - The unit has no `[Install]` section on purpose, so nothing starts at login.
-- The installed unit is a copy, so re-run `install.sh` after editing `flm.service`.
+- The installed units are copies, so re-run `install.sh` after editing `flm.service` or `open-webui.service`.
+- Open WebUI's `-e` settings apply on first launch only. To test a change, `docker volume rm open-webui` first.
 - No absolute paths in the repo. `install.sh` derives them.
 - Serve on localhost only. No `--host 0.0.0.0`, because it is an unauthenticated LLM. Keep `--cors 0`.
 - Run `flm list` with `FLM_DISABLE_UPDATE_CHECK=1`, or listing re-pulls every outdated model.

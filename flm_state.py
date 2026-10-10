@@ -14,6 +14,8 @@ COLOUR_LOADING = "#d8a03c"  # amber: weights moving into DRAM
 COLOUR_IDLE = "#888888"
 COLOUR_FAULT = "#d04040"
 
+UP_STATES = ("active", "activating")
+
 # (line prefix, substring, phase). The prefix match is what makes this safe:
 # flm logs the model's own generated text verbatim into the same stream, so a
 # model discussing "Loading model:" would otherwise drive the icon.
@@ -186,6 +188,21 @@ def visual_state(load: str, active: str, phase: str | None) -> VisualState:
     if active == "failed":
         return VisualState(COLOUR_FAULT, "failed", False)
     return VisualState(COLOUR_IDLE, active, False)
+
+
+def webui_action(flm_was_up: bool, flm_active: str, webui_active: str,
+                 autostart: bool) -> str | None:
+    """The systemctl verb that keeps Open WebUI in step with flm, or None.
+
+    It cannot answer without flm, so it stops however flm went down. It starts
+    only on flm coming up, so a manual stop sticks while flm keeps running.
+    """
+    webui_up = webui_active in UP_STATES
+    if webui_up and flm_active in ("inactive", "failed"):
+        return "stop"
+    if autostart and flm_active in UP_STATES and not flm_was_up and not webui_up:
+        return "start"
+    return None
 
 
 def should_idle_stop(active: str, phase: str | None,

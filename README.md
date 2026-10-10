@@ -60,6 +60,22 @@ The server shuts down when you quit the tray, and after thirty minutes with no r
 
 One thing to know: FastFlowLM loads models on demand, so whichever model Page Assist asks for is the one that gets loaded. The tray's model choice only decides which one is already warm when the first request arrives.
 
+## Pairing it with Open WebUI
+
+[Open WebUI](https://github.com/open-webui/open-webui) is the full chat app: images, web search, fetching a URL, and agents. If `install.sh` finds docker, it installs `open-webui.service` and pulls the image, which is a few GB. To update, run `docker pull ghcr.io/open-webui/open-webui:main` and restart it.
+
+It expects rootless Docker, which by default blocks containers from your localhost, flm included. Lifting that lets every container reach every localhost service, so decide if that is fine for you:
+
+```bash
+mkdir -p ~/.config/systemd/user/docker.service.d
+printf '[Service]\nEnvironment=DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false\n' > ~/.config/systemd/user/docker.service.d/host-loopback.conf
+systemctl --user daemon-reload && systemctl --user restart docker
+```
+
+The Open WebUI submenu starts and stops it, opens it at `http://127.0.0.1:8080`, and shows its logs. It reads "activating" until the page answers, which takes about a minute. Tick "Auto start when a model is loaded" and it starts whenever flm comes up. It stops whenever flm goes down, however that happens, since it can do nothing without it. Its own Start brings flm up too.
+
+It runs with no login and allows cross-site requests from its own address only. That does not stop a DNS rebinding attack, so turn the login on if that matters to you. The background title, tag and query requests are off, because each one is another trip to the NPU. Those settings apply on first launch only, and after that its Admin panel owns them.
+
 ## Choosing a model
 
 The tray lists every model you have pulled, but which one is fastest here is not obvious. The HX 370 has roughly half the memory bandwidth of Strix Halo, and a mixture-of-experts model with 3B active parameters is bandwidth-bound, so a smaller dense model can beat a much larger MoE on interactive latency.

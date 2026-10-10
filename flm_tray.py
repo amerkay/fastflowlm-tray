@@ -28,25 +28,27 @@ from pathlib import Path
 
 from PyQt6.QtCore import (
     QLockFile, QProcess, QProcessEnvironment, QSettings, QStandardPaths,
-    QTimer, Qt,
+    QTimer, Qt, QUrl,
 )
 from PyQt6.QtGui import (
-    QAction, QActionGroup, QBrush, QColor, QIcon, QPainter, QPixmap,
+    QAction, QActionGroup, QBrush, QColor, QDesktopServices, QIcon, QPainter,
+    QPixmap,
 )
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from flm_state import (
-    COLOUR_IDLE, COLOUR_RUNNING, CTX_CHOICES, ctx_label, model_dir_for_line,
+    COLOUR_IDLE, COLOUR_RUNNING, CTX_CHOICES, UP_STATES, ctx_label, model_dir_for_line,
     parse_model_list, phase_for_line, read_asr, read_ctx, read_env, read_model,
-    resolve_model_tag, should_idle_stop, shown_model, visual_state, write_asr, write_ctx,
-    write_model,
+    resolve_model_tag, should_idle_stop, shown_model, visual_state, webui_action,
+    write_asr, write_ctx, write_model,
 )
 
 UNIT = "flm.service"
+WEBUI_UNIT = "open-webui.service"
+WEBUI_URL = "http://127.0.0.1:8080"
 POLL_MS = 2000
 IDLE_STOP_S = 30 * 60
 
-JOURNAL_CMD = ["journalctl", "--user", "-u", UNIT, "-n", "200", "-f"]
 # -o cat strips the syslog prefix, leaving flm's own line verbatim.
 JOURNAL_FOLLOW = ["--user", "-u", UNIT, "-n", "50", "-f", "-o", "cat"]
 
@@ -85,8 +87,12 @@ def make_dot_icon(colour: str, alpha: int = 255) -> QIcon:
     return QIcon(pix)
 
 
-def unit_props() -> tuple[str, str, str]:
-    """(LoadState, ActiveState, ExecStart) for UNIT.
+def journal_cmd(unit: str) -> list[str]:
+    return ["journalctl", "--user", "-u", unit, "-n", "200", "-f"]
+
+
+def unit_props(unit: str = UNIT) -> tuple[str, str, str]:
+    """(LoadState, ActiveState, ExecStart) for unit.
 
     `systemctl show` succeeds even for an unknown unit, which is what lets us
     tell "not installed" apart from "installed but stopped" — `is-active`
@@ -96,7 +102,7 @@ def unit_props() -> tuple[str, str, str]:
     """
     try:
         out = subprocess.run(
-            ["systemctl", "--user", "show", UNIT, "--property=LoadState",
+            ["systemctl", "--user", "show", unit, "--property=LoadState",
              "--property=ActiveState", "--property=ExecStart"],
             capture_output=True, text=True, timeout=2,
         ).stdout
@@ -105,6 +111,14 @@ def unit_props() -> tuple[str, str, str]:
     props = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
     return (props.get("LoadState", "unknown"), props.get("ActiveState", "unknown"),
             props.get("ExecStart", ""))
+
+
+def enable_controls(load: str, active: str, start: QAction, stop: QAction) -> bool:
+    """Grey out Start/Stop that would do nothing; True while the unit is up."""
+    up = active in UP_STATES
+    start.setEnabled(load == "loaded" and not up)
+    stop.setEnabled(load == "loaded" and active != "inactive")
+    return up
 
 
 class FlmTray:
@@ -120,11 +134,13 @@ class FlmTray:
         self._phase: str | None = None      # journal: loading / busy / ready
         self._loaded_dir: str | None = None  # journal: model actually resident
         self._active = "unknown"            # last polled ActiveState
+        self._flm_was_up = False            # last poll's flm state, for webui_action()
+        self._open_pending = False          # open the browser once Open WebUI is ready
         self._last_used = time.monotonic()
         self._breath_colour = COLOUR_RUNNING
         self._frame = 0
-        # Held (not detached) so a second left-click reuses the open terminal.
-        self._log_proc = QProcess()
+        # Held (not detached) so a second click reuses that unit's open terminal.
+        self._log_procs: dict[str, QProcess] = {}
         self._settings = QSettings("flm-tray", "flm-tray")
 
         # Needs an icon before show(); Qt warns and may not draw otherwise.
@@ -189,11 +205,50 @@ class FlmTray:
         menu.addSeparator()
         menu.addAction(self.act_idle)
         menu.addSeparator()
-        menu.addAction(QAction("View logs", menu, triggered=self.view_logs))
+        menu.addMenu(self._build_webui_menu(menu))
+        menu.addSeparator()
+        menu.addAction(QAction("View logs", menu, triggered=lambda: self.view_logs()))
         menu.addAction(QAction("Stop server && quit", menu, triggered=self.quit))
 
         self.tray.setContextMenu(menu)
         self._build_model_items()
+
+    def _build_webui_menu(self, parent: QMenu) -> QMenu:
+        menu = self.webui_menu = QMenu("Open WebUI", parent)
+        self.act_webui_open = QAction("Open in browser", menu, triggered=self._open_webui)
+        self.act_webui_start = QAction("Start", menu, triggered=self._start_webui)
+        self.act_webui_stop = QAction("Stop", menu,
+                                      triggered=lambda: self._send("stop", WEBUI_UNIT))
+        self.act_webui_auto = QAction("Auto start when a model is loaded",
+                                      menu, checkable=True)
+        self.act_webui_auto.setChecked(
+            self._settings.value("webuiAutostart", False, type=bool))
+        self.act_webui_auto.toggled.connect(self._set_webui_autostart)
+
+        for act in (self.act_webui_open, self.act_webui_start, self.act_webui_stop):
+            menu.addAction(act)
+        menu.addAction(QAction("View logs", menu,
+                               triggered=lambda: self.view_logs(WEBUI_UNIT)))
+        menu.addSeparator()
+        menu.addAction(self.act_webui_auto)
+        return menu
+
+    def _set_webui_autostart(self, on: bool) -> None:
+        self._settings.setValue("webuiAutostart", on)
+        self._flm_was_up = False  # so a server already up counts as coming up
+        self._refresh()
+
+    def _start_webui(self) -> None:
+        """Brings flm up too. One systemctl call, so the poll never sees Open
+        WebUI up with flm still down and stops it again."""
+        if self._active in UP_STATES:
+            self._send("start", WEBUI_UNIT)
+        else:
+            self._systemctl("start", WEBUI_UNIT)
+
+    def _open_webui(self) -> None:
+        self._open_pending = True
+        self._refresh()
 
     def _build_model_items(self) -> None:
         self.model_menu.clear()
@@ -265,7 +320,7 @@ class FlmTray:
         """Flags are read once at process start, so a running server has to
         come back for them. A stopped one is left stopped: this is a preference,
         not a reason to pull 20 GB into memory."""
-        if self._active in ("active", "activating"):
+        if self._active in UP_STATES:
             self._systemctl("restart")
         else:
             self._sync_ctx_menu()
@@ -351,8 +406,19 @@ class FlmTray:
             self._systemctl("stop")
             return
 
+        webui = unit_props(WEBUI_UNIT)[:2]
+        if verb := webui_action(self._flm_was_up, active, webui[1],
+                                self.act_webui_auto.isChecked()):
+            self._send(verb, WEBUI_UNIT)
+        self._flm_was_up = active in UP_STATES
+        self._open_pending &= webui[1] in UP_STATES
+        if self._open_pending and webui[1] == "active":
+            self._open_pending = False
+            QDesktopServices.openUrl(QUrl(WEBUI_URL))
+
         env, serving = read_env(ENV_FILE), self._serving()
-        state = (load, active, self._phase, env, serving, self._unit_current)
+        state = (load, active, self._phase, env, serving, self._unit_current, webui,
+                 self._open_pending)
         if state == self._shown:
             return
         self._shown = state
@@ -367,18 +433,25 @@ class FlmTray:
             note, shown = f"{UNIT} not installed ({load})", None
         self._paint(colour, f"flm: {note} — {shown or 'unit default'}", animate)
 
-        up = active in ("active", "activating")
-        self.act_start.setEnabled(load == "loaded" and not up)
-        self.act_stop.setEnabled(load == "loaded" and active != "inactive")
+        up = enable_controls(load, active, self.act_start, self.act_stop)
         self.act_restart.setEnabled(load == "loaded" and up)
+
+        self.webui_menu.setTitle(f"Open WebUI ({visual_state(*webui, None).note}){TITLE_PAD}")
+        enable_controls(*webui, self.act_webui_start, self.act_webui_stop)
+        self.act_webui_open.setEnabled(webui[1] in UP_STATES and not self._open_pending)
+        self.act_webui_open.setText("Open in browser when ready" if webui[1] == "activating"
+                                    else "Open in browser")
 
     # -- actions ------------------------------------------------------------
 
-    def _systemctl(self, verb: str) -> None:
+    def _systemctl(self, verb: str, *also: str) -> None:
         self._phase = None  # stale until the journal says otherwise
         self._loaded_dir = None
         self._last_used = time.monotonic()  # a fresh start is not idle
-        QProcess.startDetached("systemctl", ["--user", verb, UNIT])
+        self._send(verb, UNIT, *also)
+
+    def _send(self, verb: str, *units: str) -> None:
+        QProcess.startDetached("systemctl", ["--user", verb, *units])
         QTimer.singleShot(400, self._refresh)  # reflect it before the next poll
 
     def _choose_model(self, name: str) -> None:
@@ -393,21 +466,23 @@ class FlmTray:
 
     def quit(self) -> None:
         """Stop the server, then exit. systemd carries the stop to completion
-        (TimeoutStopSec) on its own — the detached call outlives us."""
-        self._systemctl("stop")
+        (TimeoutStopSec) on its own — the detached call outlives us. Open WebUI
+        goes too, since the poll that would stop it ends with us."""
+        self._systemctl("stop", WEBUI_UNIT)
         self.app.quit()
 
-    def view_logs(self) -> None:
-        if self._log_proc.state() != QProcess.ProcessState.NotRunning:
+    def view_logs(self, unit: str = UNIT) -> None:
+        proc = self._log_procs.setdefault(unit, QProcess())
+        if proc.state() != QProcess.ProcessState.NotRunning:
             return
         term = next((t for t in ("konsole", "x-terminal-emulator", "xterm")
                      if shutil.which(t)), None)
         if term is None:
             QMessageBox.information(
-                None, "flm-tray", "Run:\n" + " ".join(JOURNAL_CMD)
+                None, "flm-tray", "Run:\n" + " ".join(journal_cmd(unit))
             )
             return
-        self._log_proc.start(term, ["-e", *JOURNAL_CMD])
+        proc.start(term, ["-e", *journal_cmd(unit)])
 
     def _on_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
