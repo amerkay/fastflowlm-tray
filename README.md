@@ -62,7 +62,7 @@ One thing to know: FastFlowLM loads models on demand, so whichever model Page As
 
 ## Pairing it with Open WebUI
 
-[Open WebUI](https://github.com/open-webui/open-webui) is the full chat app: images, web search, fetching a URL, and agents. If `install.sh` finds docker, it installs `open-webui.service` and pulls the image, which is a few GB. To update, run `docker pull ghcr.io/open-webui/open-webui:main` and restart it.
+[Open WebUI](https://github.com/open-webui/open-webui) is the full chat app: images, web search, fetching a URL, and agents. If `install.sh` finds docker compose, it installs `open-webui.service`, which runs `compose.yaml`, and pulls the images, a few GB. To update, run `docker compose -f compose.yaml pull` and restart it.
 
 It expects rootless Docker, which by default blocks containers from your localhost, flm included. Lifting that lets every container reach every localhost service, so decide if that is fine for you:
 
@@ -74,7 +74,9 @@ systemctl --user daemon-reload && systemctl --user restart docker
 
 The Open WebUI submenu starts and stops it, opens it at `http://127.0.0.1:8080`, and shows its logs. It reads "activating" until the page answers, which takes about a minute. Tick "Auto start when a model is loaded" and it starts whenever flm comes up. It stops whenever flm goes down, however that happens, since it can do nothing without it. Its own Start brings flm up too.
 
-It runs with no login and allows cross-site requests from its own address only. That does not stop a DNS rebinding attack. Open WebUI cannot add a login to an existing no-login install, so turning it on means `docker volume rm open-webui`, which deletes your chats, and `WEBUI_AUTH=True` in the unit. The background title, tag and query requests are off, because each one is another trip to the NPU. Those settings apply on first launch only, and after that its Admin panel owns them.
+Web search goes through a [SearXNG](https://github.com/searxng/searxng) container in the same compose file. It publishes no port, so only Open WebUI can reach it. Turn search on per chat with the globe button. On an install from before SearXNG, set it in Admin, Settings, Web Search: engine `searxng`, URL `http://searxng:8080/search?q=<query>`.
+
+It runs with no login and allows cross-site requests from its own address only. That does not stop a DNS rebinding attack. Open WebUI cannot add a login to an existing no-login install, so turning it on means `docker volume rm open-webui`, which deletes your chats, and `WEBUI_AUTH: "True"` in `compose.yaml`. The background title, tag and query requests are off, because each one is another trip to the NPU. Those settings apply on first launch only, and after that its Admin panel owns them.
 
 ## Choosing a model
 

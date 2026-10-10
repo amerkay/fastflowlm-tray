@@ -1,0 +1,36 @@
+# Open WebUI with SearXNG search, run by open-webui.service. Edits apply on its next restart.
+# Rootless Docker: 10.0.2.2 is host loopback once DISABLE_HOST_LOOPBACK=false.
+# Open WebUI's environment applies on first launch only; the Admin UI owns it after that.
+# Login is off, so CORS blocks other sites but not DNS rebinding.
+name: open-webui
+
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    ports: ["127.0.0.1:8080:8080"]
+    volumes: [open-webui:/app/backend/data]
+    environment:
+      WEBUI_AUTH: "False"
+      WEBUI_SECRET_KEY_FILE: /app/backend/data/.webui_secret_key
+      CORS_ALLOW_ORIGIN: http://127.0.0.1:8080;http://localhost:8080
+      ENABLE_OLLAMA_API: "False"
+      OPENAI_API_BASE_URL: http://10.0.2.2:52625/v1
+      OPENAI_API_KEY: flm
+      ENABLE_TITLE_GENERATION: "False"
+      ENABLE_TAGS_GENERATION: "False"
+      ENABLE_FOLLOW_UP_GENERATION: "False"
+      ENABLE_SEARCH_QUERY_GENERATION: "False"
+      ENABLE_RETRIEVAL_QUERY_GENERATION: "False"
+      ENABLE_WEB_SEARCH: "True"
+      WEB_SEARCH_ENGINE: searxng
+      SEARXNG_QUERY_URL: http://searxng:8080/search?q=<query>
+
+  # No published port: only Open WebUI can reach it.
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    volumes: [./searxng.yml:/etc/searxng/settings.yml:ro]
+    environment: [SEARXNG_SECRET]  # from the unit's EnvironmentFile, written by install.sh
+
+volumes:
+  open-webui:
+    name: open-webui  # the pre-compose volume, so existing chats carry over

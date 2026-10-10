@@ -56,8 +56,8 @@ Commit on `main`, never a feature branch or PR. Still ask before every commit.
 
 - Never make the tray the parent of `flm serve`. The unit grants `LimitMEMLOCK=infinity`; a Plasma-session child inherits the PAM limit and fails at model load.
 - The unit has no `[Install]` section on purpose, so nothing starts at login.
-- The installed units are copies, so re-run `install.sh` after editing `flm.service` or `open-webui.service`.
-- Open WebUI's `-e` settings apply on first launch only. To test a change, `docker volume rm open-webui` first.
+- The installed units are copies, so re-run `install.sh` after editing `flm.service` or `open-webui.service`. `compose.yaml` and `searxng.yml` are read in place on restart.
+- Open WebUI's `environment:` in `compose.yaml` applies on first launch only. To test a change, `docker volume rm open-webui` first.
 - No absolute paths in the repo. `install.sh` derives them.
 - Serve on localhost only. No `--host 0.0.0.0`, because it is an unauthenticated LLM. Keep `--cors 0`.
 - Run `flm list` with `FLM_DISABLE_UPDATE_CHECK=1`, or listing re-pulls every outdated model.

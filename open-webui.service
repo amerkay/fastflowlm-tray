@@ -1,25 +1,13 @@
-# Open WebUI container, driven by the tray. install.sh fills in the docker path.
-# Rootless Docker: 10.0.2.2 is host loopback once DISABLE_HOST_LOOPBACK=false.
-# -e settings apply on first launch only; the Admin UI owns them after that.
-# Login is off, so CORS blocks other sites but not DNS rebinding.
+# Runs compose.yaml in the foreground so its logs land in the journal.
+# install.sh fills in the docker and compose paths.
 
 [Unit]
 Description=Open WebUI for FastFlowLM
 
 [Service]
-ExecStartPre=-/usr/bin/docker rm -f open-webui
-ExecStart=/usr/bin/docker run --rm --name open-webui -p 127.0.0.1:8080:8080 \
-  -v open-webui:/app/backend/data \
-  -e WEBUI_AUTH=False \
-  -e WEBUI_SECRET_KEY_FILE=/app/backend/data/.webui_secret_key \
-  -e "CORS_ALLOW_ORIGIN=http://127.0.0.1:8080;http://localhost:8080" \
-  -e ENABLE_OLLAMA_API=False \
-  -e OPENAI_API_BASE_URL=http://10.0.2.2:52625/v1 -e OPENAI_API_KEY=flm \
-  -e ENABLE_TITLE_GENERATION=False -e ENABLE_TAGS_GENERATION=False \
-  -e ENABLE_FOLLOW_UP_GENERATION=False -e ENABLE_SEARCH_QUERY_GENERATION=False \
-  -e ENABLE_RETRIEVAL_QUERY_GENERATION=False \
-  ghcr.io/open-webui/open-webui:main
+EnvironmentFile=%E/flm-tray/searxng.env
+ExecStart=/usr/bin/docker compose -f @COMPOSE@ up --abort-on-container-exit
 # Keeps the unit "activating" until the UI answers.
-ExecStartPost=/bin/sh -c 'until /usr/bin/docker exec open-webui curl -sf http://127.0.0.1:8080/health >/dev/null; do sleep 2; done'
-ExecStop=/usr/bin/docker stop open-webui
+ExecStartPost=/bin/sh -c 'until /usr/bin/docker compose -f @COMPOSE@ exec -T open-webui curl -sf http://127.0.0.1:8080/health >/dev/null; do sleep 2; done'
+ExecStop=/usr/bin/docker compose -f @COMPOSE@ down
 TimeoutStartSec=600

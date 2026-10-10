@@ -32,9 +32,16 @@ esac
 
 mkdir -p "$(dirname "$UNIT")" "$(dirname "$AUTOSTART")" "$(dirname "$LAUNCHER")"
 sed "s|^ExecStart=/usr/bin/flm |ExecStart=$FLM |" "$REPO/flm.service" > "$UNIT"
-# Optional: without docker the tray shows Open WebUI as not installed.
+# Optional: without docker compose the tray shows Open WebUI as not installed.
 ENGINE="$(command -v docker || true)"
-[ -z "$ENGINE" ] || sed "s|/usr/bin/docker |$ENGINE |g" "$REPO/open-webui.service" > "$WEBUI_UNIT"
+"$ENGINE" compose version >/dev/null 2>&1 || ENGINE=""
+if [ -n "$ENGINE" ]; then
+  sed "s|/usr/bin/docker |$ENGINE |g; s|@COMPOSE@|$REPO/compose.yaml|g" "$REPO/open-webui.service" > "$WEBUI_UNIT"
+  # Generated once, so a reinstall keeps it.
+  SECRET="$CONFIG/flm-tray/searxng.env"
+  mkdir -p "$(dirname "$SECRET")"
+  [ -f "$SECRET" ] || echo "SEARXNG_SECRET=$("$PYTHON" -c 'import secrets; print(secrets.token_hex(32))')" > "$SECRET"
+fi
 sed "s|@EXEC@|$PYTHON $REPO/flm_tray.py|" "$REPO/flm-tray.desktop.in" > "$AUTOSTART"
 # Same rendered entry in both places; launching it twice is harmless, because
 # the tray takes a QLockFile and a second instance exits without a window.
@@ -59,10 +66,11 @@ Check that memlock is unlimited under systemd:
 EOF
 
 if [ -z "$ENGINE" ]; then
-  echo "Skipped Open WebUI: docker is not in PATH."
+  echo "Skipped Open WebUI: docker compose is not available."
   exit 0
 fi
 # Pulled once here, where progress shows; updating is a deliberate `pull`.
-IMAGE="$(grep -om1 'ghcr\.io/\S*' "$REPO/open-webui.service")"
 printf '\nInstalled %s\n' "$WEBUI_UNIT"
-"$ENGINE" image inspect "$IMAGE" >/dev/null 2>&1 || "$ENGINE" pull "$IMAGE"
+for IMAGE in $("$ENGINE" compose -f "$REPO/compose.yaml" config --images); do
+  "$ENGINE" image inspect "$IMAGE" >/dev/null 2>&1 || "$ENGINE" pull "$IMAGE"
+done
