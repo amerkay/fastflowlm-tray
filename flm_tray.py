@@ -37,8 +37,8 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from flm_state import (
-    COLOUR_IDLE, COLOUR_RUNNING, CTX_CHOICES, UP_STATES, ctx_label, model_dir_for_line,
-    parse_model_list, phase_for_line, read_asr, read_ctx, read_env, read_model,
+    COLOUR_IDLE, COLOUR_RUNNING, CTX_CHOICES, UP_STATES, controls, ctx_label,
+    model_dir_for_line, open_when_ready, parse_model_list, parse_unit_props, phase_for_line, read_asr, read_ctx, read_env, read_model,
     resolve_model_tag, should_idle_stop, shown_model, visual_state, webui_action,
     write_asr, write_ctx, write_model,
 )
@@ -91,8 +91,8 @@ def journal_cmd(unit: str) -> list[str]:
     return ["journalctl", "--user", "-u", unit, "-n", "200", "-f"]
 
 
-def unit_props(unit: str = UNIT) -> tuple[str, str, str]:
-    """(LoadState, ActiveState, ExecStart) for unit.
+def unit_props(*units: str) -> list[tuple[str, str, str]]:
+    """(LoadState, ActiveState, ExecStart) per unit, in one systemctl call.
 
     `systemctl show` succeeds even for an unknown unit, which is what lets us
     tell "not installed" apart from "installed but stopped" — `is-active`
@@ -102,23 +102,19 @@ def unit_props(unit: str = UNIT) -> tuple[str, str, str]:
     """
     try:
         out = subprocess.run(
-            ["systemctl", "--user", "show", unit, "--property=LoadState",
+            ["systemctl", "--user", "show", *units, "--property=LoadState",
              "--property=ActiveState", "--property=ExecStart"],
             capture_output=True, text=True, timeout=2,
         ).stdout
     except (OSError, subprocess.SubprocessError):
-        return "unknown", "unknown", ""
-    props = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
-    return (props.get("LoadState", "unknown"), props.get("ActiveState", "unknown"),
-            props.get("ExecStart", ""))
+        out = ""
+    return [(p.get("LoadState", "unknown"), p.get("ActiveState", "unknown"),
+             p.get("ExecStart", "")) for p in parse_unit_props(out, len(units))]
 
 
-def enable_controls(load: str, active: str, start: QAction, stop: QAction) -> bool:
-    """Grey out Start/Stop that would do nothing; True while the unit is up."""
-    up = active in UP_STATES
-    start.setEnabled(load == "loaded" and not up)
-    stop.setEnabled(load == "loaded" and active != "inactive")
-    return up
+def enable(actions: tuple[QAction, ...], flags: tuple[bool, ...]) -> None:
+    for act, on in zip(actions, flags):
+        act.setEnabled(on)
 
 
 class FlmTray:
@@ -134,7 +130,7 @@ class FlmTray:
         self._phase: str | None = None      # journal: loading / busy / ready
         self._loaded_dir: str | None = None  # journal: model actually resident
         self._active = "unknown"            # last polled ActiveState
-        self._flm_was_up = False            # last poll's flm state, for webui_action()
+        self._flm_before = "unknown"        # last poll's flm state, for webui_action()
         self._open_pending = False          # open the browser once Open WebUI is ready
         self._last_used = time.monotonic()
         self._breath_colour = COLOUR_RUNNING
@@ -235,7 +231,7 @@ class FlmTray:
 
     def _set_webui_autostart(self, on: bool) -> None:
         self._settings.setValue("webuiAutostart", on)
-        self._flm_was_up = False  # so a server already up counts as coming up
+        self._flm_before = "unknown"  # so a server already up counts as coming up
         self._refresh()
 
     def _start_webui(self) -> None:
@@ -397,7 +393,9 @@ class FlmTray:
         return resolve_model_tag(self._loaded_dir, [n for n, _ in self._models or []])
 
     def _refresh(self) -> None:
-        load, active, exec_start = unit_props()
+        flm, webui = unit_props(UNIT, WEBUI_UNIT)
+        load, active, exec_start = flm
+        webui_load, webui_active, _ = webui
         self._active = active
         self._unit_current = "FLM_ASR" in exec_start
         limit = IDLE_STOP_S if self.act_idle.isChecked() else math.inf
@@ -406,19 +404,17 @@ class FlmTray:
             self._systemctl("stop")
             return
 
-        webui = unit_props(WEBUI_UNIT)[:2]
-        if verb := webui_action(self._flm_was_up, active, webui[1],
+        if verb := webui_action(self._flm_before, active, webui_load, webui_active,
                                 self.act_webui_auto.isChecked()):
             self._send(verb, WEBUI_UNIT)
-        self._flm_was_up = active in UP_STATES
-        self._open_pending &= webui[1] in UP_STATES
-        if self._open_pending and webui[1] == "active":
-            self._open_pending = False
+        self._flm_before = active
+        self._open_pending, open_now = open_when_ready(self._open_pending, webui_active)
+        if open_now:
             QDesktopServices.openUrl(QUrl(WEBUI_URL))
 
         env, serving = read_env(ENV_FILE), self._serving()
-        state = (load, active, self._phase, env, serving, self._unit_current, webui,
-                 self._open_pending)
+        state = (load, active, self._phase, env, serving, self._unit_current,
+                 webui_load, webui_active, self._open_pending)
         if state == self._shown:
             return
         self._shown = state
@@ -433,13 +429,13 @@ class FlmTray:
             note, shown = f"{UNIT} not installed ({load})", None
         self._paint(colour, f"flm: {note} — {shown or 'unit default'}", animate)
 
-        up = enable_controls(load, active, self.act_start, self.act_stop)
-        self.act_restart.setEnabled(load == "loaded" and up)
+        enable((self.act_start, self.act_stop, self.act_restart), controls(load, active))
 
-        self.webui_menu.setTitle(f"Open WebUI ({visual_state(*webui, None).note}){TITLE_PAD}")
-        enable_controls(*webui, self.act_webui_start, self.act_webui_stop)
-        self.act_webui_open.setEnabled(webui[1] in UP_STATES and not self._open_pending)
-        self.act_webui_open.setText("Open in browser when ready" if webui[1] == "activating"
+        note = visual_state(webui_load, webui_active, None).note
+        self.webui_menu.setTitle(f"Open WebUI ({note}){TITLE_PAD}")
+        enable((self.act_webui_start, self.act_webui_stop), controls(webui_load, webui_active))
+        self.act_webui_open.setEnabled(webui_active in UP_STATES and not self._open_pending)
+        self.act_webui_open.setText("Open in browser when ready" if webui_active == "activating"
                                     else "Open in browser")
 
     # -- actions ------------------------------------------------------------

@@ -638,27 +638,102 @@ def test_a_zero_limit_stops_as_soon_as_any_idle_time_has_passed():
 @pytest.mark.parametrize("autostart", [True, False])
 def test_open_webui_stops_whenever_flm_is_down(flm, webui, autostart):
     # A crash or an outside `systemctl stop` counts, not only a tray click.
-    assert flm_state.webui_action(True, flm, webui, autostart) == "stop"
+    assert flm_state.webui_action("active", flm, "loaded", webui, autostart) == "stop"
 
 
 @pytest.mark.parametrize("flm", ["active", "activating", "deactivating"])
 def test_open_webui_is_not_stopped_while_flm_is_up_or_still_going_down(flm):
-    assert flm_state.webui_action(True, flm, "active", True) is None
+    assert flm_state.webui_action("active", flm, "loaded", "active", True) is None
 
 
 def test_a_stopped_open_webui_is_not_stopped_again():
-    assert flm_state.webui_action(True, "inactive", "inactive", True) is None
+    assert flm_state.webui_action("active", "inactive", "loaded", "inactive", True) is None
 
 
+@pytest.mark.parametrize("before", ["inactive", "failed", "unknown"])
 @pytest.mark.parametrize("flm", ["active", "activating"])
-def test_flm_coming_up_starts_open_webui_when_autostart_is_on(flm):
-    assert flm_state.webui_action(False, flm, "inactive", True) == "start"
-    assert flm_state.webui_action(False, flm, "inactive", False) is None
+def test_flm_coming_up_starts_open_webui_when_autostart_is_on(before, flm):
+    # "unknown" is the tray's first poll: a server already up counts as coming up.
+    assert flm_state.webui_action(before, flm, "loaded", "inactive", True) == "start"
+    assert flm_state.webui_action(before, flm, "loaded", "inactive", False) is None
 
 
 def test_a_manual_stop_sticks_while_flm_stays_up():
-    assert flm_state.webui_action(True, "active", "inactive", True) is None
+    assert flm_state.webui_action("active", "active", "loaded", "inactive", True) is None
+
+
+def test_a_manual_stop_survives_a_model_switch():
+    # A restart passes through deactivating; that is not flm coming up from down.
+    assert flm_state.webui_action("deactivating", "activating", "loaded", "inactive", True) is None
 
 
 def test_a_running_open_webui_is_never_started_again():
-    assert flm_state.webui_action(False, "active", "active", True) is None
+    assert flm_state.webui_action("inactive", "active", "loaded", "active", True) is None
+
+
+@pytest.mark.parametrize("load", ["not-found", "unknown"])
+def test_an_uninstalled_open_webui_is_never_started_or_stopped(load):
+    assert flm_state.webui_action("inactive", "active", load, "inactive", True) is None
+    assert flm_state.webui_action("active", "inactive", load, "active", True) is None
+
+
+# --------------------------------------------------------------------------
+# controls
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "active,expected",
+    [
+        ("inactive", (True, False, False)),
+        ("active", (False, True, True)),
+        ("activating", (False, True, True)),
+        ("deactivating", (True, True, False)),
+        ("failed", (True, True, False)),  # Stop clears the failed state
+    ],
+)
+def test_each_control_is_offered_only_when_it_would_do_something(active, expected):
+    assert tuple(flm_state.controls("loaded", active)) == expected
+
+
+@pytest.mark.parametrize("active", ["active", "inactive", "failed"])
+def test_an_uninstalled_unit_offers_no_controls(active):
+    assert tuple(flm_state.controls("not-found", active)) == (False, False, False)
+
+
+# --------------------------------------------------------------------------
+# open_when_ready
+# --------------------------------------------------------------------------
+
+
+def test_a_click_while_starting_waits_then_opens_once_ready():
+    assert flm_state.open_when_ready(True, "activating") == (True, False)
+    assert flm_state.open_when_ready(True, "active") == (False, True)
+
+
+@pytest.mark.parametrize("active", ["inactive", "failed", "deactivating"])
+def test_a_waiting_click_is_dropped_if_open_webui_goes_down(active):
+    assert flm_state.open_when_ready(True, active) == (False, False)
+
+
+@pytest.mark.parametrize("active", ["active", "activating", "inactive"])
+def test_without_a_click_nothing_opens(active):
+    assert flm_state.open_when_ready(False, active) == (False, False)
+
+
+# --------------------------------------------------------------------------
+# parse_unit_props
+# --------------------------------------------------------------------------
+
+
+def test_each_unit_gets_its_own_block_in_the_order_asked():
+    text = ("LoadState=loaded\nActiveState=active\nExecStart={ path=/usr/bin/flm }\n\n"
+            "LoadState=not-found\nActiveState=inactive\nExecStart=\n")
+    flm, webui = flm_state.parse_unit_props(text, 2)
+    assert flm == {"LoadState": "loaded", "ActiveState": "active",
+                   "ExecStart": "{ path=/usr/bin/flm }"}
+    assert webui["LoadState"] == "not-found"
+
+
+def test_missing_output_still_yields_one_entry_per_unit():
+    assert flm_state.parse_unit_props("", 2) == [{}, {}]

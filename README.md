@@ -74,7 +74,7 @@ systemctl --user daemon-reload && systemctl --user restart docker
 
 The Open WebUI submenu starts and stops it, opens it at `http://127.0.0.1:8080`, and shows its logs. It reads "activating" until the page answers, which takes about a minute. Tick "Auto start when a model is loaded" and it starts whenever flm comes up. It stops whenever flm goes down, however that happens, since it can do nothing without it. Its own Start brings flm up too.
 
-It runs with no login and allows cross-site requests from its own address only. That does not stop a DNS rebinding attack, so turn the login on if that matters to you. The background title, tag and query requests are off, because each one is another trip to the NPU. Those settings apply on first launch only, and after that its Admin panel owns them.
+It runs with no login and allows cross-site requests from its own address only. That does not stop a DNS rebinding attack. Open WebUI cannot add a login to an existing no-login install, so turning it on means `docker volume rm open-webui`, which deletes your chats, and `WEBUI_AUTH=True` in the unit. The background title, tag and query requests are off, because each one is another trip to the NPU. Those settings apply on first launch only, and after that its Admin panel owns them.
 
 ## Choosing a model
 

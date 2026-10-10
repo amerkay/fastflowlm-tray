@@ -190,19 +190,50 @@ def visual_state(load: str, active: str, phase: str | None) -> VisualState:
     return VisualState(COLOUR_IDLE, active, False)
 
 
-def webui_action(flm_was_up: bool, flm_active: str, webui_active: str,
-                 autostart: bool) -> str | None:
+def parse_unit_props(text: str, count: int) -> list[dict[str, str]]:
+    """One property dict per unit from a multi-unit `systemctl show`, which
+    prints a blank-line-separated block per unit in the order asked."""
+    blocks = [dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+              for block in text.split("\n\n") if block.strip()]
+    return (blocks + [{}] * count)[:count]
+
+
+class Controls(NamedTuple):
+    start: bool
+    stop: bool
+    restart: bool
+
+
+def controls(load: str, active: str) -> Controls:
+    """Which of Start, Stop and Restart would do something right now."""
+    loaded, up = load == "loaded", active in UP_STATES
+    return Controls(loaded and not up, loaded and active != "inactive", loaded and up)
+
+
+def webui_action(flm_before: str, flm_active: str, webui_load: str,
+                 webui_active: str, autostart: bool) -> str | None:
     """The systemctl verb that keeps Open WebUI in step with flm, or None.
 
-    It cannot answer without flm, so it stops however flm went down. It starts
-    only on flm coming up, so a manual stop sticks while flm keeps running.
+    It stops however flm went down, since it cannot answer without it. It starts
+    only when flm comes up from down, so a manual stop survives a model switch.
     """
+    if webui_load != "loaded":
+        return None
     webui_up = webui_active in UP_STATES
     if webui_up and flm_active in ("inactive", "failed"):
         return "stop"
-    if autostart and flm_active in UP_STATES and not flm_was_up and not webui_up:
-        return "start"
-    return None
+    came_up = flm_active in UP_STATES and flm_before not in (*UP_STATES, "deactivating")
+    return "start" if autostart and came_up and not webui_up else None
+
+
+def open_when_ready(pending: bool, webui_active: str) -> tuple[bool, bool]:
+    """(still pending, open now) for an "Open in browser" click.
+
+    Waits through startup, and is dropped if Open WebUI goes down instead.
+    """
+    if webui_active == "active":
+        return False, pending
+    return pending and webui_active in UP_STATES, False
 
 
 def should_idle_stop(active: str, phase: str | None,

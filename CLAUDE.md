@@ -5,7 +5,7 @@ A PyQt6 system tray that controls a FastFlowLM server running as a systemd user 
 ## Commands
 
 ```bash
-python3 -m pytest tests/ -q          # 199 cases, no Qt, no network, under a second
+python3 -m pytest tests/ -q          # 223 cases, no Qt, no network, under a second
 python3 -m py_compile flm_tray.py    # the Qt shell has no test coverage
 /usr/bin/python3 flm_tray.py &       # never conda or venv; PyQt6 is a system package
 ./install.sh                         # host terminal only, a sandbox cannot reach host systemd
